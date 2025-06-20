@@ -7,8 +7,8 @@ from discord.ui import Button, View
 import asyncio
 from DB_Connect import get_songs, add_song, increase_playcount, save_play_history, get_play_history
 from datetime import date
-from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import datetime, timedelta
 
 
 load_dotenv()
@@ -30,7 +30,6 @@ client = discord.Client(intents=intents)
 
 global current_playback, current_progress, current_duration
 
-
 class DisconnectButtonView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -43,13 +42,43 @@ class DisconnectButtonView(View):
         
         await interaction.response.send_message("Disconnecting the bot...", ephemeral=True)
         await client.close()
-        
+
+async def daily_review():
+    day_passed = (date.today() - timedelta(days=1)).isoformat()
+    data = get_play_history(day_passed)
+    
+    if not data:
+        print(f"No play history found for {day_passed}.")
+        return
+    
+    sorted_songs = await sort_by_play_count(None, data)
+    daily_review_message = f"**Daily Review!**\n"
+    count = 1
+    
+    for song in sorted_songs:    
+        daily_review_message += f"{count}. **{song['title']}** by {song['artist']} - Played {song['playCount']} times\n"
+        count += 1
+    
+    channel = await client.fetch_channel(CHANNEL_ID)
+    
+    if channel:
+        if len(daily_review_message) > 2000:
+            chunks = split_message(daily_review_message)
+            for chunk in chunks:
+                await channel.send(chunk)
+        else:
+            await channel.send(daily_review_message)
+    else:
+        print(f"Channel with ID {CHANNEL_ID} not found.")
+
 async def sort_by_play_count(message, songs, artist=False):
     try:
-        parts = message.content.split()
         limit = None
-        if len(parts) > 1 and parts[1].isdigit():
-            limit = int(parts[1])
+        if message:
+            parts = message.content.split()
+            limit = None
+            if len(parts) > 1 and parts[1].isdigit():
+                limit = int(parts[1])
 
         if not songs:
             await message.channel.send("No song data available.")
@@ -288,7 +317,15 @@ def main():
     print(f"Client ID: {SPOTIFY_CLIENT_ID}")
     print(f"Client Secret: {SPOTIFY_CLIENT_SECRET}")
     print(f"Redirect URI: {SPOTIFY_REDIRECT_URI}")
+    
+
+async def start_bot():
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(daily_review, 'cron', hour=0, minute=0)
+    scheduler.start()
+    
+    await client.start(TOKEN)
 
 if __name__ == "__main__":
     main()
-    client.run(TOKEN)
+    asyncio.run(start_bot())
