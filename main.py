@@ -8,7 +8,7 @@ import asyncio
 from DB_Connect import play, get_play_history
 from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 
 load_dotenv()
@@ -28,7 +28,7 @@ intents.messages = True
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-global current_playback, current_progress, current_duration
+global current_playback, current_progress, current_duration, spotify_status, spotify_loop_task
 
 class DisconnectButtonView(View):
     def __init__(self):
@@ -134,7 +134,7 @@ def song_exists(data, title, artist):
     return False
         
 async def spotify_loop():
-    global current_playback, current_progress, current_duration
+    global current_playback, current_progress, current_duration, spotify_status
     sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
@@ -151,55 +151,81 @@ async def spotify_loop():
     listening_to_mogu_mogu = False
     threshold = 15000
 
-    while not client.is_closed():
-        if channel:
-            current = sp.current_playback()
-            if current and current['is_playing']:
-                track = current['item']
-                
-                current_playback = f"{track['name']} by {track['artists'][0]['name']}"
-                current_progress = current['progress_ms']
-                current_duration = track['duration_ms']
-                
-                if current['progress_ms'] > threshold:
-                    if track['id'] != track_id:
-                        title = track['name']
-                        artist = track['artists'][0]['name']
-                        album = track['album']['name']
-                        duration = track['duration_ms'] // 1000
-                        track_id = track['id']
-                        
-                        play(title, artist, album, duration)
-                    if track['id'] == mogu_mogu_id and not listening_to_mogu_mogu:
-                        try:
-                            await channel.send(f"Hpmanen is listening to Mogu Mogu!\nMogu Mogu Counter: {mogu_mogu_counter}")
-                            mogu_mogu_counter += 1        
-                        except Exception:
-                            print("Could not perform action.")
-                        listening_to_mogu_mogu = True
-                    elif track['id'] != mogu_mogu_id:  
-                        listening_to_mogu_mogu = False
+    try:
+        while not client.is_closed():
+            spotify_status = "Spotify loop is running."
+            if channel:
+                current = sp.current_playback()
+                if current and current['is_playing']:
+                    track = current['item']
+                    
+                    current_playback = f"{track['name']} by {track['artists'][0]['name']}"
+                    current_progress = current['progress_ms']
+                    current_duration = track['duration_ms']
+                    
+                    if current['progress_ms'] > threshold:
+                        if track['id'] != track_id:
+                            title = track['name']
+                            artist = track['artists'][0]['name']
+                            album = track['album']['name']
+                            duration = track['duration_ms'] // 1000
+                            track_id = track['id']
+                            
+                            play(title, artist, album, duration)
+                        if track['id'] == mogu_mogu_id and not listening_to_mogu_mogu:
+                            try:
+                                await channel.send(f"Hpmanen is listening to Mogu Mogu!\nMogu Mogu Counter: {mogu_mogu_counter}")
+                                mogu_mogu_counter += 1        
+                            except Exception:
+                                print("Could not perform action.")
+                            listening_to_mogu_mogu = True
+                        elif track['id'] != mogu_mogu_id:  
+                            listening_to_mogu_mogu = False
+                else:
+                    current_playback = "Nothing is currently playing."
+                    current_progress = 0
+                    current_duration = 0
+                    track_id = ""
+                    listening_to_mogu_mogu = False
             else:
-                current_playback = "Nothing is currently playing."
-                current_progress = 0
-                current_duration = 0
-                track_id = ""
-                listening_to_mogu_mogu = False
-        else:
-            print(f"Channel with ID {CHANNEL_ID} not found.")
+                print(f"Channel with ID {CHANNEL_ID} not found.")
 
-        await asyncio.sleep(10)
+            await asyncio.sleep(10)
+    except Exception as ex:
+        print(f"Spotify loop has been cancelled. Exception: {ex}")
+    
+    spotify_status = "Spotify loop has ended."
 
 @client.event
 async def on_ready():
+    global spotify_loop_task
     print(f'Logged in as {client.user}')
-    client.loop.create_task(spotify_loop())
+    spotify_loop_task = client.loop.create_task(spotify_loop())
             
 @client.event
 async def on_message(message):
-    global current_playback, current_progress, current_duration
+    global current_playback, current_progress, current_duration, spotify_loop_task
     if message.author == client.user:
         return
+    
+    if message.content == "!restart":
+        if message.author.id == int(os.getenv('MY_DISCORD_ID')):
+            try:
+                if spotify_loop_task and not spotify_loop_task.done():
+                    spotify_loop_task.cancel()
+                    # Wait for it to exit cleanly
+                    try:
+                        await spotify_loop_task
+                    except asyncio.CancelledError:
+                        pass
+
+                # Start a fresh loop
+                spotify_loop_task = client.loop.create_task(spotify_loop())
+                await message.channel.send("Spotify loop restarted.")
+            except Exception as e:
+                await message.channel.send(f"Error restarting Spotify loop: {e}")
+        else:
+            await message.channel.send("Permission denied. lol Weeb xd.")
     
     if message.content == "!disconnect":
         view = DisconnectButtonView()
@@ -284,7 +310,9 @@ async def on_message(message):
                 await message.channel.send(today_played_message)
         else:
             await message.channel.send(f"No play history found for {history_date}.")
-        
+    
+    if message.content == "!status":
+        await message.channel.send(spotify_status)
     
     if message.content == "!help":
         help_message = (
@@ -292,6 +320,7 @@ async def on_message(message):
             "`!current`: Show currently playing song and its progress.\n"
             "`!disconnect`: Disconnect the bot.\n"
             "`!history [date]`: Show play history for a specific date in YYYY-MM-DD format (default is today).\n"
+            "`!restart` : Restart the Spotify tracking loop. (Only dev has permission to do this)\n"
             "`!stats`: Show all songs played.\n"
             "`!stats [number]`: Show top [number] most-played songs.\n"
             "`!topartists`: Show top artists ranked by total plays.\n"
