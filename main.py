@@ -5,7 +5,7 @@ import os
 import discord
 from discord.ui import Button, View
 import asyncio
-from DB_Connect import get_songs, add_song, increase_playcount, save_play_history, get_play_history
+from DB_Connect import play, get_play_history
 from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta
@@ -45,16 +45,14 @@ class DisconnectButtonView(View):
 
 async def daily_review():
     day_passed = (date.today() - timedelta(days=1)).isoformat()
-    data = get_play_history(day_passed)
+    sorted_songs = get_play_history(day_passed)
     
-    if not data:
+    if not sorted_songs:
         print(f"No play history found for {day_passed}.")
         return
     
-    sorted_songs = await sort_by_play_count(None, data)
     daily_review_message = f"**Daily Review!**\n"
     count = 1
-    
     for song in sorted_songs:    
         daily_review_message += f"{count}. **{song['title']}** by {song['artist']} - Played {song['playCount']} times\n"
         count += 1
@@ -90,11 +88,11 @@ async def sort_by_play_count(message, songs, artist=False):
                 artist = song["artist"]
                 playcount = song["playCount"]
                 
-                existing_artist = next((a for a in artists if a["name"].lower() == artist.lower()), None)
+                existing_artist = next((a for a in artists if a["artist"].lower() == artist.lower()), None)
                 if existing_artist:
                     existing_artist["playCount"] += playcount
                 else:
-                    artists.append({"name": artist, "playCount": playcount})
+                    artists.append({"artist": artist, "playCount": playcount})
                 
             songs = artists        
                 
@@ -165,24 +163,13 @@ async def spotify_loop():
                 
                 if current['progress_ms'] > threshold:
                     if track['id'] != track_id:
-                        data = get_songs()
-                        song = []
-                        if not song_exists(data, track['name'], track['artists'][0]['name']):
-                            song.append({
-                                "title": track['name'],
-                                "artist": track['artists'][0]['name'],
-                                "album": track['album']['name'],
-                                "duration": track['duration_ms'],
-                                "playCount": 1
-                            })
-                            
-                            add_song(song)
-                        else :
-                            increase_playcount(track['name'], track['artists'][0]['name'])
-                        
-                        save_play_history(track['name'], track['artists'][0]['name'])
+                        title = track['name']
+                        artist = track['artists'][0]['name']
+                        album = track['album']['name']
+                        duration = track['duration_ms'] // 1000
                         track_id = track['id']
                         
+                        play(title, artist, album, duration)
                     if track['id'] == mogu_mogu_id and not listening_to_mogu_mogu:
                         try:
                             await channel.send(f"Hpmanen is listening to Mogu Mogu!\nMogu Mogu Counter: {mogu_mogu_counter}")
@@ -220,14 +207,16 @@ async def on_message(message):
     
     if message.content.startswith("!stats"):
         try:
-            data = get_songs()
-            sorted_songs = await sort_by_play_count(message, data)
-            duration = sum(song['duration']*song['playCount'] for song in sorted_songs)
-            total_seconds = duration // 1000
+            sorted_songs = get_play_history()
+            total_seconds = sum(song['duration_seconds']*song['playCount'] for song in sorted_songs)
             stats_message = "Top Songs:\n"
             count = 1
             for song in sorted_songs:
-                stats_message += f"{count}. {song['title']} by {song['artist']} - Played {song['playCount']} times\n"
+                song_time_seconds = song['duration_seconds'] * song['playCount']
+                song_time_minutes = song_time_seconds // 60
+                song_time_hours = song_time_minutes // 60
+                
+                stats_message += f"{count}. {song['title']} by {song['artist']} - Played {song['playCount']} times for a total of {(song_time_hours):02}:{(song_time_minutes%60):02}:{(song_time_seconds%60):02}\n"
                 count += 1
                 
             if len(stats_message) > 2000:
@@ -255,12 +244,12 @@ async def on_message(message):
         await message.channel.send(system_message)
     
     if message.content.startswith("!topartists"):
-        data = get_songs()
+        data = get_play_history()
         sorted_artists = await sort_by_play_count(message, data, True)
         top_artists_message = "Top Artists:\n"
         count = 1
         for artist in sorted_artists:
-            top_artists_message += f"{count}. {artist['name']} - Played {artist['playCount']} times\n"
+            top_artists_message += f"{count}. {artist['artist']} - Played {artist['playCount']} times\n"    
             count += 1
         
         if len(top_artists_message) > 2000:
@@ -278,10 +267,9 @@ async def on_message(message):
             history_date = message_parts[1]
             
         today_played_message = f"Play History from {history_date}:\n"
-        data = get_play_history(history_date)
+        sorted_songs = get_play_history(history_date)
         
-        if data:
-            sorted_songs = await sort_by_play_count(message, data)
+        if sorted_songs:
             count = 1
             for song in sorted_songs:
                 today_played_message += f"{count}. {song['title']} by {song['artist']} - Played {song['playCount']} times\n"
@@ -306,7 +294,6 @@ async def on_message(message):
             "`!history [date]`: Show play history for a specific date in YYYY-MM-DD format (default is today).\n"
             "`!stats`: Show all songs played.\n"
             "`!stats [number]`: Show top [number] most-played songs.\n"
-            "`!today`: Show today's play history.\n"
             "`!topartists`: Show top artists ranked by total plays.\n"
             "`!topartists [number]`: Show top [number] most-played artists.\n"
             "`!help`: Show this help message."
