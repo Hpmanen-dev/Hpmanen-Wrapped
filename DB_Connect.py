@@ -72,3 +72,30 @@ def get_play_history(history_date=None):
     except Exception as e:
         print(f"Error fetching play history: {e}")
         return []
+
+def get_full_play_history():
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT s.title, s.artist, s.duration_seconds, ph."PlayCount"
+                    FROM "PlayHistory" ph
+                    JOIN "Songs" s ON s.id = ph.song_id
+                    ORDER BY ph."PlayCount" DESC;
+                """)
+
+                rows = cur.fetchall()
+
+                # format as dictionaries for easy use
+                return [
+                    {
+                        "title": r[0],
+                        "artist": r[1],
+                        "duration_seconds": r[2],
+                        "playCount": r[3]
+                    }
+                    for r in rows
+                ]
+    except Exception as e:
+        print(f"Error fetching full play history: {e}")
+        return []

@@ -5,7 +5,7 @@ import os
 import discord
 from discord.ui import Button, View
 import asyncio
-from DB_Connect import play, get_play_history
+from DB_Connect import play, get_play_history, get_full_play_history
 from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import timedelta
@@ -126,10 +126,10 @@ def split_message(message, max_length=2000):
             chunks.append(chunk)
     return chunks
 
-def song_exists(data, title, artist):
+def song_exists(data, title, artist, playCount=1):
     for song in data:
         if (song["title"].lower() == title.lower() and song["artist"].lower() == artist.lower()):
-            song["playCount"] += 1
+            song["playCount"] += playCount
             return True
     return False
         
@@ -233,11 +233,23 @@ async def on_message(message):
     
     if message.content.startswith("!stats"):
         try:
-            sorted_songs = get_play_history()
+            sorted_songs = get_full_play_history()
             total_seconds = sum(song['duration_seconds']*song['playCount'] for song in sorted_songs)
             stats_message = "Top Songs:\n"
             count = 1
+            songs_in_list = []
+            
             for song in sorted_songs:
+                song_in_list = song_exists(songs_in_list, song['title'], song['artist'], song['playCount'])
+                if not song_in_list:
+                    songs_in_list.append({
+                        "title": song['title'],
+                        "artist": song['artist'],
+                        "duration_seconds": song['duration_seconds'],
+                        "playCount": song['playCount']
+                    })
+            
+            for song in songs_in_list:
                 song_time_seconds = song['duration_seconds'] * song['playCount']
                 song_time_minutes = song_time_seconds // 60
                 song_time_hours = song_time_minutes // 60
@@ -270,7 +282,7 @@ async def on_message(message):
         await message.channel.send(system_message)
     
     if message.content.startswith("!topartists"):
-        data = get_play_history()
+        data = get_full_play_history()
         sorted_artists = await sort_by_play_count(message, data, True)
         top_artists_message = "Top Artists:\n"
         count = 1
